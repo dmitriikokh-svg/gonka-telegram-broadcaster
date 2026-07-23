@@ -13,6 +13,7 @@ class FakeAPI:
         self.callbacks = []
         self.members = {}
         self.copy_failures = {}
+        self.callback_error = None
         self.next_message_id = 1000
 
     def get_me(self):
@@ -64,6 +65,8 @@ class FakeAPI:
         return value
 
     def answer_callback_query(self, callback_query_id, text="", *, show_alert=False):
+        if self.callback_error is not None:
+            raise self.callback_error
         self.callbacks.append((callback_query_id, text, show_alert))
         return True
 
@@ -219,6 +222,28 @@ class AppTests(unittest.TestCase):
         self.assertEqual(summary["sent"], 1)
         self.assertIn("bot was kicked", self.api.sent[-1]["text"])
 
+    def test_expired_callback_ack_does_not_prevent_delivery(self) -> None:
+        self.register("one", -1001)
+        self.app.process_update(private_message(1, 1, "/broadcast"))
+        campaign = self.db.get_open_campaign(1)
+        self.app.process_update(private_message(1, 2, "Hello"))
+        self.api.callback_error = TelegramAPIError(
+            400,
+            "Bad Request: query is too old and response timeout expired or query ID is invalid",
+        )
+        self.app.process_update(
+            {
+                "update_id": 3,
+                "callback_query": {
+                    "id": "expired-callback",
+                    "from": {"id": 1},
+                    "data": f"send:{campaign['id']}",
+                    "message": {"chat": {"id": 1, "type": "private"}},
+                },
+            }
+        )
+        self.assertEqual(self.db.delivery_summary(campaign["id"])["sent"], 1)
+
     def test_removal_deactivates_all_chat_topics(self) -> None:
         self.register("one", -1001, 10)
         self.register("two", -1001, 20)
@@ -236,4 +261,3 @@ class AppTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
