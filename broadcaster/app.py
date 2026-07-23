@@ -306,32 +306,45 @@ class BroadcasterApp:
         chat_id = int(chat.get("id", user_id))
 
         if not self._is_admin(user_id):
-            self.api.answer_callback_query(query_id, "Доступ запрещён", show_alert=True)
+            self._answer_callback(query_id, "Доступ запрещён", show_alert=True)
             return
         try:
             action, raw_id = data.split(":", 1)
             campaign_id = int(raw_id)
         except (ValueError, TypeError):
-            self.api.answer_callback_query(query_id, "Некорректная кнопка", show_alert=True)
+            self._answer_callback(query_id, "Некорректная кнопка", show_alert=True)
             return
 
         if action == "cancel":
             changed = self.db.cancel_campaign(campaign_id, user_id)
-            self.api.answer_callback_query(
+            self._answer_callback(
                 query_id, "Черновик отменён" if changed else "Черновик уже обработан"
             )
             if changed:
                 self._send(chat_id, f"Рассылка #{campaign_id} отменена.")
             return
         if action != "send":
-            self.api.answer_callback_query(query_id, "Неизвестное действие", show_alert=True)
+            self._answer_callback(query_id, "Неизвестное действие", show_alert=True)
             return
         if not self.db.transition_to_sending(campaign_id, user_id):
-            self.api.answer_callback_query(query_id, "Рассылка уже обработана или просрочена")
+            self._answer_callback(query_id, "Рассылка уже обработана или просрочена")
             return
 
-        self.api.answer_callback_query(query_id, "Рассылка запущена")
+        # A callback acknowledgement is only a Telegram UI convenience. It may
+        # already be too old after a local restart, but a valid confirmed
+        # campaign must still be delivered exactly once.
+        self._answer_callback(query_id, "Рассылка запущена")
         self._deliver_campaign(chat_id, campaign_id)
+
+    def _answer_callback(self, query_id: str, text: str, *, show_alert: bool = False) -> None:
+        try:
+            self.api.answer_callback_query(query_id, text, show_alert=show_alert)
+        except TelegramAPIError as exc:
+            LOGGER.info(
+                "Could not acknowledge callback query (code=%s): %s",
+                exc.error_code,
+                exc.description,
+            )
 
     def _deliver_campaign(self, operator_chat_id: int, campaign_id: int) -> None:
         campaign = self.db.get_campaign(campaign_id)
@@ -499,4 +512,3 @@ class BroadcasterApp:
             message_thread_id=int(thread_id) if thread_id is not None else None,
             reply_markup=reply_markup,
         )
-
