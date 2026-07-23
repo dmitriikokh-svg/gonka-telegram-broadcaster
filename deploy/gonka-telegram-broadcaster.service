@@ -1,0 +1,23 @@
+[Unit]
+Description=Gonka Telegram Broadcaster
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gonka-broadcaster
+Group=gonka-broadcaster
+WorkingDirectory=/opt/gonka-telegram-broadcaster
+EnvironmentFile=/etc/gonka-telegram-broadcaster.env
+ExecStart=/usr/bin/python3 -m broadcaster
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gonka-telegram-broadcaster
+
+[Install]
+WantedBy=multi-user.target
+

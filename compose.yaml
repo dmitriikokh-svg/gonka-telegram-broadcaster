@@ -1,0 +1,12 @@
+services:
+  broadcaster:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - broadcaster-data:/data
+
+volumes:
+  broadcaster-data:
+
