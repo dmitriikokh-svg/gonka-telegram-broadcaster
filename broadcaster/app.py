@@ -16,19 +16,19 @@ ADMIN_STATUSES = {"administrator", "creator"}
 
 HELP_TEXT = """Gonka Support Broadcaster
 
-/whoami — показать ваш числовой Telegram ID
-/broadcast — рассылка во все активные группы
-/broadcast alias1 alias2 — рассылка в выбранные группы
-/broadcast_silent — то же самое без звукового уведомления
-/groups — список направлений
-/history — последние рассылки
-/cancel — отменить текущий черновик
+/whoami — show your numeric Telegram user ID
+/broadcast — broadcast to all active destinations
+/broadcast alias1 alias2 — broadcast to selected destinations
+/broadcast_silent — broadcast without a notification sound
+/groups — list active destinations
+/history — show recent broadcasts
+/cancel — cancel the current draft
 
-В группе или теме:
-/register alias — зарегистрировать направление
-/unregister — отключить направление
+In a group or topic:
+/register alias — register a destination
+/unregister — deactivate a destination
 
-Рассылку может запускать только разрешённый оператор в личном чате."""
+Only an authorized operator can start a broadcast in a private chat."""
 
 
 class BroadcasterApp:
@@ -53,7 +53,10 @@ class BroadcasterApp:
         self.bot_username = str(me.get("username", ""))
         interrupted = self.db.recover_interrupted_campaigns()
         if interrupted:
-            LOGGER.warning("Marked %s interrupted campaign(s); no automatic resend", interrupted)
+            LOGGER.warning(
+                "Marked %s interrupted campaign(s); no automatic resend",
+                interrupted,
+            )
         LOGGER.info("Started @%s (id=%s)", self.bot_username, self.bot_user_id)
 
     def run_forever(self) -> None:
@@ -70,11 +73,18 @@ class BroadcasterApp:
                     try:
                         self.process_update(update)
                     except Exception:
-                        LOGGER.exception("Failed to process Telegram update %s", update_id)
+                        LOGGER.exception(
+                            "Failed to process Telegram update %s",
+                            update_id,
+                        )
                     offset = max(offset, update_id + 1)
                     self.db.set_state_int("update_offset", offset)
             except TelegramAPIError as exc:
-                LOGGER.warning("Telegram polling error %s: %s", exc.error_code, exc.description)
+                LOGGER.warning(
+                    "Telegram polling error %s: %s",
+                    exc.error_code,
+                    exc.description,
+                )
                 self.sleeper(3)
             except KeyboardInterrupt:
                 LOGGER.info("Stopped")
@@ -107,6 +117,7 @@ class BroadcasterApp:
         chat = message.get("chat") or {}
         if "id" not in sender or "id" not in chat:
             return
+
         user_id = int(sender["id"])
         chat_id = int(chat["id"])
         chat_type = str(chat.get("type", ""))
@@ -119,39 +130,58 @@ class BroadcasterApp:
             elif command == "unregister":
                 self._unregister_destination(message)
             elif command == "whoami":
-                self._send(chat_id, "Для безопасности используйте /whoami в личном чате с ботом.")
+                self._send(
+                    chat_id,
+                    "For security, use /whoami in a private chat with the bot.",
+                )
             return
 
         if command in {"start", "help"}:
             self._send(chat_id, HELP_TEXT)
             return
+
         if command == "whoami":
-            self._send(chat_id, f"Ваш Telegram user ID: {user_id}")
+            self._send(chat_id, f"Your Telegram user ID: {user_id}")
             return
 
         if not self._is_admin(user_id):
             if command or text:
                 self._send(
                     chat_id,
-                    "Доступ запрещён. Отправьте /whoami и добавьте этот ID в ADMIN_USER_IDS.",
+                    "Access denied. Send /whoami and add this ID "
+                    "to ADMIN_USER_IDS.",
                 )
             return
 
         if command in {"broadcast", "broadcast_silent"}:
-            self._start_campaign(chat_id, user_id, args, silent=command == "broadcast_silent")
+            self._start_campaign(
+                chat_id,
+                user_id,
+                args,
+                silent=command == "broadcast_silent",
+            )
         elif command == "groups":
             self._show_groups(chat_id)
         elif command == "history":
             self._show_history(chat_id, user_id)
         elif command == "cancel":
             count = self.db.cancel_open_campaigns(user_id)
-            self._send(chat_id, "Черновик отменён." if count else "Активного черновика нет.")
+            self._send(
+                chat_id,
+                "Draft canceled."
+                if count
+                else "There is no active draft.",
+            )
         elif command:
-            self._send(chat_id, "Неизвестная команда. Используйте /help.")
+            self._send(chat_id, "Unknown command. Use /help.")
         else:
             self._accept_campaign_content(message, user_id)
 
-    def _register_destination(self, message: dict[str, Any], args: list[str]) -> None:
+    def _register_destination(
+        self,
+        message: dict[str, Any],
+        args: list[str],
+    ) -> None:
         sender = message["from"]
         chat = message["chat"]
         user_id = int(sender["id"])
@@ -159,144 +189,282 @@ class BroadcasterApp:
         thread_id = message.get("message_thread_id")
 
         if not self._is_admin(user_id):
-            self._send(chat_id, "Регистрация доступна только разрешённому оператору.", thread_id)
-            return
-        if len(args) != 1 or not ALIAS_RE.fullmatch(args[0]):
             self._send(
                 chat_id,
-                "Использование: /register alias\nAlias: 2–40 символов A-Z, a-z, 0-9, _ или -.",
+                "Only an authorized operator can register a destination.",
                 thread_id,
             )
             return
+
+        if len(args) != 1 or not ALIAS_RE.fullmatch(args[0]):
+            self._send(
+                chat_id,
+                "Usage: /register alias\n"
+                "Alias: 2–40 characters using A-Z, a-z, 0-9, _ or -.",
+                thread_id,
+            )
+            return
+
         if self.bot_user_id is None:
             me = self.api.get_me()
             self.bot_user_id = int(me["id"])
 
         try:
             operator = self.api.get_chat_member(chat_id, user_id)
-            bot_member = self.api.get_chat_member(chat_id, int(self.bot_user_id))
+            bot_member = self.api.get_chat_member(
+                chat_id,
+                int(self.bot_user_id),
+            )
         except TelegramAPIError as exc:
-            self._send(chat_id, f"Не удалось проверить права: {exc.description}", thread_id)
+            self._send(
+                chat_id,
+                f"Could not check permissions: {exc.description}",
+                thread_id,
+            )
             return
 
         if operator.get("status") not in ADMIN_STATUSES:
-            self._send(chat_id, "Оператор должен быть администратором этой группы.", thread_id)
+            self._send(
+                chat_id,
+                "The operator must be an administrator of this group.",
+                thread_id,
+            )
             return
+
         bot_status = bot_member.get("status")
-        bot_can_send = bot_status in {"member", "administrator", "creator"} or (
-            bot_status == "restricted" and bool(bot_member.get("can_send_messages"))
+        bot_can_send = bot_status in {
+            "member",
+            "administrator",
+            "creator",
+        } or (
+            bot_status == "restricted"
+            and bool(bot_member.get("can_send_messages"))
         )
+
         if not bot_can_send:
-            self._send(chat_id, "У бота нет права отправлять сообщения в эту группу.", thread_id)
+            self._send(
+                chat_id,
+                "The bot is not allowed to send messages in this group.",
+                thread_id,
+            )
             return
 
         try:
             destination = self.db.register_destination(
                 alias=args[0],
                 chat_id=chat_id,
-                thread_id=int(thread_id) if thread_id is not None else None,
+                thread_id=(
+                    int(thread_id)
+                    if thread_id is not None
+                    else None
+                ),
                 chat_title=str(chat.get("title", chat_id)),
                 registered_by=user_id,
             )
         except ValueError as exc:
             self._send(chat_id, str(exc), thread_id)
             return
-        topic = f", тема {destination['thread_id']}" if destination["thread_id"] is not None else ""
+
+        topic = (
+            f", topic {destination['thread_id']}"
+            if destination["thread_id"] is not None
+            else ""
+        )
         self._send(
             chat_id,
-            f"Направление зарегистрировано: {destination['alias']} ({destination['chat_title']}{topic}).",
+            f"Destination registered: {destination['alias']} "
+            f"({destination['chat_title']}{topic}).",
             thread_id,
         )
 
-    def _unregister_destination(self, message: dict[str, Any]) -> None:
+    def _unregister_destination(
+        self,
+        message: dict[str, Any],
+    ) -> None:
         sender = message["from"]
         chat = message["chat"]
         user_id = int(sender["id"])
         chat_id = int(chat["id"])
         thread_id = message.get("message_thread_id")
+
         if not self._is_admin(user_id):
-            self._send(chat_id, "Отключение доступно только разрешённому оператору.", thread_id)
+            self._send(
+                chat_id,
+                "Only an authorized operator can deactivate "
+                "a destination.",
+                thread_id,
+            )
             return
+
         try:
             member = self.api.get_chat_member(chat_id, user_id)
         except TelegramAPIError as exc:
-            self._send(chat_id, f"Не удалось проверить права: {exc.description}", thread_id)
+            self._send(
+                chat_id,
+                f"Could not check permissions: {exc.description}",
+                thread_id,
+            )
             return
+
         if member.get("status") not in ADMIN_STATUSES:
-            self._send(chat_id, "Оператор должен быть администратором этой группы.", thread_id)
+            self._send(
+                chat_id,
+                "The operator must be an administrator of this group.",
+                thread_id,
+            )
             return
+
         changed = self.db.deactivate_destination(
             chat_id=chat_id,
-            thread_id=int(thread_id) if thread_id is not None else None,
+            thread_id=(
+                int(thread_id)
+                if thread_id is not None
+                else None
+            ),
         )
         self._send(
             chat_id,
-            "Направление отключено." if changed else "Это направление не зарегистрировано.",
+            (
+                "Destination deactivated."
+                if changed
+                else "This destination is not registered."
+            ),
             thread_id,
         )
 
     def _start_campaign(
-        self, chat_id: int, user_id: int, aliases: list[str], *, silent: bool
+        self,
+        chat_id: int,
+        user_id: int,
+        aliases: list[str],
+        *,
+        silent: bool,
     ) -> None:
-        destinations, missing = self.db.resolve_destinations(aliases if aliases else None)
+        destinations, missing = self.db.resolve_destinations(
+            aliases if aliases else None
+        )
+
         if missing:
-            self._send(chat_id, "Не найдены активные направления: " + ", ".join(missing))
+            self._send(
+                chat_id,
+                "Active destinations not found: " + ", ".join(missing),
+            )
             return
+
         if not destinations:
-            self._send(chat_id, "Нет активных направлений. Сначала выполните /register в группе.")
+            self._send(
+                chat_id,
+                "There are no active destinations. "
+                "Run /register in a group first.",
+            )
             return
+
         campaign = self.db.create_campaign(
             created_by=user_id,
-            target_ids=[int(item["id"]) for item in destinations],
+            target_ids=[
+                int(item["id"])
+                for item in destinations
+            ],
             silent=silent,
             ttl_minutes=self.settings.draft_ttl_minutes,
         )
-        target_text = ", ".join(item["alias"] for item in destinations)
+
+        target_text = ", ".join(
+            item["alias"]
+            for item in destinations
+        )
         self._send(
             chat_id,
-            f"Черновик #{campaign['id']} создан.\n"
-            f"Получатели ({len(destinations)}): {target_text}\n"
-            f"Режим: {'без звука' if silent else 'обычный'}\n\n"
-            "Теперь отправьте боту одно готовое сообщение. Оно ещё не будет разослано.",
+            f"Draft #{campaign['id']} created.\n"
+            f"Recipients ({len(destinations)}): {target_text}\n"
+            f"Mode: {'silent' if silent else 'standard'}\n\n"
+            "Now send the bot one complete message. "
+            "It will not be broadcast yet.",
         )
 
-    def _accept_campaign_content(self, message: dict[str, Any], user_id: int) -> None:
+    def _accept_campaign_content(
+        self,
+        message: dict[str, Any],
+        user_id: int,
+    ) -> None:
         chat_id = int(message["chat"]["id"])
         campaign = self.db.get_open_campaign(user_id)
-        if campaign is None or campaign["status"] != "awaiting_content":
-            self._send(chat_id, "Сначала создайте рассылку командой /broadcast.")
+
+        if (
+            campaign is None
+            or campaign["status"] != "awaiting_content"
+        ):
+            self._send(
+                chat_id,
+                "Start a broadcast with /broadcast first.",
+            )
             return
+
         try:
-            self.api.copy_message(chat_id, chat_id, int(message["message_id"]))
+            self.api.copy_message(
+                chat_id,
+                chat_id,
+                int(message["message_id"]),
+            )
         except TelegramAPIError as exc:
             self._send(
                 chat_id,
-                "Не удалось создать предпросмотр. Отправьте другое сообщение.\n"
-                f"Причина: {exc.description}",
+                "Could not create a preview. "
+                "Send a different message.\n"
+                f"Reason: {exc.description}",
             )
             return
-        if not self.db.set_campaign_content(campaign["id"], chat_id, int(message["message_id"])):
-            self._send(chat_id, "Черновик уже изменён или отменён. Начните заново.")
+
+        content_saved = self.db.set_campaign_content(
+            campaign["id"],
+            chat_id,
+            int(message["message_id"]),
+        )
+        if not content_saved:
+            self._send(
+                chat_id,
+                "The draft has already been changed or canceled. "
+                "Start again.",
+            )
             return
+
         keyboard = {
             "inline_keyboard": [
                 [
                     {
-                        "text": f"✅ Разослать в {len(campaign['target_ids'])} групп",
-                        "callback_data": f"send:{campaign['id']}",
+                        "text": (
+                            f"✅ Send to "
+                            f"{len(campaign['target_ids'])} groups"
+                        ),
+                        "callback_data": (
+                            f"send:{campaign['id']}"
+                        ),
                     }
                 ],
-                [{"text": "❌ Отмена", "callback_data": f"cancel:{campaign['id']}"}],
+                [
+                    {
+                        "text": "❌ Cancel",
+                        "callback_data": (
+                            f"cancel:{campaign['id']}"
+                        ),
+                    }
+                ],
             ]
         }
+
         self._send(
             chat_id,
-            f"Предпросмотр рассылки #{campaign['id']} показан выше.\n"
-            "Проверьте текст, ссылки, вложение и количество получателей.",
+            f"The preview for broadcast #{campaign['id']} "
+            "is shown above.\n"
+            "Check the text, links, attachment, "
+            "and number of recipients.",
             reply_markup=keyboard,
         )
 
-    def _handle_callback(self, query: dict[str, Any]) -> None:
+    def _handle_callback(
+        self,
+        query: dict[str, Any],
+    ) -> None:
         query_id = str(query.get("id", ""))
         sender = query.get("from") or {}
         user_id = int(sender.get("id", 0))
@@ -306,57 +474,118 @@ class BroadcasterApp:
         chat_id = int(chat.get("id", user_id))
 
         if not self._is_admin(user_id):
-            self._answer_callback(query_id, "Доступ запрещён", show_alert=True)
+            self._answer_callback(
+                query_id,
+                "Access denied",
+                show_alert=True,
+            )
             return
+
         try:
             action, raw_id = data.split(":", 1)
             campaign_id = int(raw_id)
         except (ValueError, TypeError):
-            self._answer_callback(query_id, "Некорректная кнопка", show_alert=True)
+            self._answer_callback(
+                query_id,
+                "Invalid button",
+                show_alert=True,
+            )
             return
 
         if action == "cancel":
-            changed = self.db.cancel_campaign(campaign_id, user_id)
+            changed = self.db.cancel_campaign(
+                campaign_id,
+                user_id,
+            )
             self._answer_callback(
-                query_id, "Черновик отменён" if changed else "Черновик уже обработан"
+                query_id,
+                (
+                    "Draft canceled"
+                    if changed
+                    else "Draft has already been processed"
+                ),
             )
             if changed:
-                self._send(chat_id, f"Рассылка #{campaign_id} отменена.")
+                self._send(
+                    chat_id,
+                    f"Broadcast #{campaign_id} canceled.",
+                )
             return
+
         if action != "send":
-            self._answer_callback(query_id, "Неизвестное действие", show_alert=True)
-            return
-        if not self.db.transition_to_sending(campaign_id, user_id):
-            self._answer_callback(query_id, "Рассылка уже обработана или просрочена")
+            self._answer_callback(
+                query_id,
+                "Unknown action",
+                show_alert=True,
+            )
             return
 
-        # A callback acknowledgement is only a Telegram UI convenience. It may
-        # already be too old after a local restart, but a valid confirmed
-        # campaign must still be delivered exactly once.
-        self._answer_callback(query_id, "Рассылка запущена")
-        self._deliver_campaign(chat_id, campaign_id)
+        if not self.db.transition_to_sending(
+            campaign_id,
+            user_id,
+        ):
+            self._answer_callback(
+                query_id,
+                "Broadcast has already been processed or expired",
+            )
+            return
 
-    def _answer_callback(self, query_id: str, text: str, *, show_alert: bool = False) -> None:
+        # A callback acknowledgement is only a Telegram UI
+        # convenience. It may already be too old after a local
+        # restart, but a valid confirmed campaign must still be
+        # delivered exactly once.
+        self._answer_callback(
+            query_id,
+            "Broadcast started",
+        )
+        self._deliver_campaign(
+            chat_id,
+            campaign_id,
+        )
+
+    def _answer_callback(
+        self,
+        query_id: str,
+        text: str,
+        *,
+        show_alert: bool = False,
+    ) -> None:
         try:
-            self.api.answer_callback_query(query_id, text, show_alert=show_alert)
+            self.api.answer_callback_query(
+                query_id,
+                text,
+                show_alert=show_alert,
+            )
         except TelegramAPIError as exc:
             LOGGER.info(
-                "Could not acknowledge callback query (code=%s): %s",
+                "Could not acknowledge callback query "
+                "(code=%s): %s",
                 exc.error_code,
                 exc.description,
             )
 
-    def _deliver_campaign(self, operator_chat_id: int, campaign_id: int) -> None:
+    def _deliver_campaign(
+        self,
+        operator_chat_id: int,
+        campaign_id: int,
+    ) -> None:
         campaign = self.db.get_campaign(campaign_id)
         if campaign is None:
             return
+
         consecutive_failures = 0
         stop_queue = False
         target_ids = campaign["target_ids"]
 
         for index, destination_id in enumerate(target_ids):
-            destination = self.db.get_destination(int(destination_id))
-            if destination is None or not destination["active"]:
+            destination = self.db.get_destination(
+                int(destination_id)
+            )
+
+            if (
+                destination is None
+                or not destination["active"]
+            ):
                 self.db.record_delivery(
                     campaign_id=campaign_id,
                     destination_id=int(destination_id),
@@ -365,17 +594,27 @@ class BroadcasterApp:
                     error_summary="destination is inactive",
                 )
                 continue
+
             if stop_queue:
                 self.db.record_delivery(
                     campaign_id=campaign_id,
                     destination_id=int(destination_id),
                     status="skipped",
                     attempts=0,
-                    error_summary="queue stopped after five consecutive failures",
+                    error_summary=(
+                        "queue stopped after five "
+                        "consecutive failures"
+                    ),
                 )
                 continue
 
-            sent, attempts, result, error = self._copy_with_retry(campaign, destination)
+            sent, attempts, result, error = (
+                self._copy_with_retry(
+                    campaign,
+                    destination,
+                )
+            )
+
             if sent:
                 consecutive_failures = 0
                 self.db.record_delivery(
@@ -383,7 +622,11 @@ class BroadcasterApp:
                     destination_id=int(destination_id),
                     status="sent",
                     attempts=attempts,
-                    telegram_message_id=int(result.get("message_id")) if result else None,
+                    telegram_message_id=(
+                        int(result.get("message_id"))
+                        if result
+                        else None
+                    ),
                 )
             else:
                 consecutive_failures += 1
@@ -392,40 +635,78 @@ class BroadcasterApp:
                     destination_id=int(destination_id),
                     status="failed",
                     attempts=attempts,
-                    error_code=error.error_code if error else 0,
-                    error_summary=(error.description if error else "unknown error")[:500],
+                    error_code=(
+                        error.error_code
+                        if error
+                        else 0
+                    ),
+                    error_summary=(
+                        error.description
+                        if error
+                        else "unknown error"
+                    )[:500],
                 )
                 if consecutive_failures >= 5:
                     stop_queue = True
-            if index < len(target_ids) - 1 and self.settings.send_delay_seconds:
-                self.sleeper(self.settings.send_delay_seconds)
+
+            if (
+                index < len(target_ids) - 1
+                and self.settings.send_delay_seconds
+            ):
+                self.sleeper(
+                    self.settings.send_delay_seconds
+                )
 
         self.db.finish_campaign(campaign_id)
         summary = self.db.delivery_summary(campaign_id)
+
         lines = [
-            f"Рассылка #{campaign_id} завершена.",
+            f"Broadcast #{campaign_id} completed.",
             "",
-            f"Успешно: {summary.get('sent', 0)}",
-            f"Ошибки: {summary.get('failed', 0)}",
-            f"Пропущено: {summary.get('skipped', 0)}",
+            f"Sent: {summary.get('sent', 0)}",
+            f"Failed: {summary.get('failed', 0)}",
+            f"Skipped: {summary.get('skipped', 0)}",
         ]
+
         failures = self.db.failed_deliveries(campaign_id)
         if failures:
-            lines.extend(["", "Ошибки:"])
+            lines.extend(["", "Failures:"])
             lines.extend(
-                f"- {row['alias']}: {row['error_summary']}" for row in failures[:15]
+                f"- {row['alias']}: {row['error_summary']}"
+                for row in failures[:15]
             )
             if len(failures) > 15:
-                lines.append(f"- и ещё {len(failures) - 15}")
+                lines.append(
+                    f"- and {len(failures) - 15} more"
+                )
+
         if stop_queue:
-            lines.extend(["", "Очередь остановлена после пяти последовательных ошибок."])
-        self._send(operator_chat_id, "\n".join(lines))
+            lines.extend(
+                [
+                    "",
+                    "The queue was stopped after five "
+                    "consecutive failures.",
+                ]
+            )
+
+        self._send(
+            operator_chat_id,
+            "\n".join(lines),
+        )
 
     def _copy_with_retry(
-        self, campaign: dict[str, Any], destination: dict[str, Any]
-    ) -> tuple[bool, int, dict[str, Any] | None, TelegramAPIError | None]:
+        self,
+        campaign: dict[str, Any],
+        destination: dict[str, Any],
+    ) -> tuple[
+        bool,
+        int,
+        dict[str, Any] | None,
+        TelegramAPIError | None,
+    ]:
         last_error: TelegramAPIError | None = None
         attempts = 0
+
         for attempt in range(1, 4):
             attempts = attempt
             try:
@@ -438,32 +719,70 @@ class BroadcasterApp:
                         if destination["thread_id"] is not None
                         else None
                     ),
-                    disable_notification=bool(campaign["silent"]),
+                    disable_notification=bool(
+                        campaign["silent"]
+                    ),
                 )
                 return True, attempts, result, None
+
             except TelegramAPIError as exc:
                 last_error = exc
+
                 if exc.migrate_to_chat_id is not None:
                     self.db.migrate_destination_chat(
-                        int(destination["id"]), int(exc.migrate_to_chat_id)
+                        int(destination["id"]),
+                        int(exc.migrate_to_chat_id),
                     )
-                    destination["chat_id"] = int(exc.migrate_to_chat_id)
+                    destination["chat_id"] = int(
+                        exc.migrate_to_chat_id
+                    )
                     continue
-                if exc.error_code == 429 and exc.retry_after is not None:
-                    self.sleeper(max(1, min(int(exc.retry_after), 60)))
+
+                if (
+                    exc.error_code == 429
+                    and exc.retry_after is not None
+                ):
+                    self.sleeper(
+                        max(
+                            1,
+                            min(
+                                int(exc.retry_after),
+                                60,
+                            ),
+                        )
+                    )
                     continue
+
                 if exc.error_code == 0:
-                    self.sleeper(2 ** (attempt - 1))
+                    self.sleeper(
+                        2 ** (attempt - 1)
+                    )
                     continue
+
                 break
+
         return False, attempts, None, last_error
 
-    def _show_groups(self, chat_id: int) -> None:
-        destinations = self.db.list_destinations(active_only=True)
+    def _show_groups(
+        self,
+        chat_id: int,
+    ) -> None:
+        destinations = self.db.list_destinations(
+            active_only=True
+        )
+
         if not destinations:
-            self._send(chat_id, "Активных направлений нет.")
+            self._send(
+                chat_id,
+                "There are no active destinations.",
+            )
             return
-        lines = [f"Активные направления: {len(destinations)}", ""]
+
+        lines = [
+            f"Active destinations: {len(destinations)}",
+            "",
+        ]
+
         for destination in destinations:
             topic = (
                 f", topic={destination['thread_id']}"
@@ -471,32 +790,70 @@ class BroadcasterApp:
                 else ""
             )
             lines.append(
-                f"- {destination['alias']}: {destination['chat_title']}"
-                f" (chat={destination['chat_id']}{topic})"
+                f"- {destination['alias']}: "
+                f"{destination['chat_title']} "
+                f"(chat={destination['chat_id']}{topic})"
             )
-        self._send(chat_id, "\n".join(lines))
 
-    def _show_history(self, chat_id: int, user_id: int) -> None:
+        self._send(
+            chat_id,
+            "\n".join(lines),
+        )
+
+    def _show_history(
+        self,
+        chat_id: int,
+        user_id: int,
+    ) -> None:
         rows = self.db.recent_campaigns(user_id)
+
         if not rows:
-            self._send(chat_id, "История рассылок пуста.")
+            self._send(
+                chat_id,
+                "Broadcast history is empty.",
+            )
             return
-        lines = ["Последние рассылки:", ""]
+
+        lines = [
+            "Recent broadcasts:",
+            "",
+        ]
+
         for row in rows:
             lines.append(
                 f"#{row['id']} — {row['status']}; "
-                f"успешно {row['sent_count'] or 0}, ошибок {row['failed_count'] or 0}; "
+                f"sent {row['sent_count'] or 0}, "
+                f"failed {row['failed_count'] or 0}; "
                 f"{row['created_at']}"
             )
-        self._send(chat_id, "\n".join(lines))
 
-    def _handle_membership(self, membership: dict[str, Any]) -> None:
+        self._send(
+            chat_id,
+            "\n".join(lines),
+        )
+
+    def _handle_membership(
+        self,
+        membership: dict[str, Any],
+    ) -> None:
         chat = membership.get("chat") or {}
-        new_status = (membership.get("new_chat_member") or {}).get("status")
-        if "id" in chat and new_status in {"left", "kicked"}:
-            count = self.db.deactivate_chat(int(chat["id"]))
+        new_status = (
+            membership.get("new_chat_member") or {}
+        ).get("status")
+
+        if (
+            "id" in chat
+            and new_status in {"left", "kicked"}
+        ):
+            count = self.db.deactivate_chat(
+                int(chat["id"])
+            )
             if count:
-                LOGGER.info("Deactivated %s destination(s) after bot removal from chat", count)
+                LOGGER.info(
+                    "Deactivated %s destination(s) "
+                    "after bot removal from chat",
+                    count,
+                )
 
     def _send(
         self,
@@ -509,6 +866,10 @@ class BroadcasterApp:
         self.api.send_message(
             chat_id,
             text,
-            message_thread_id=int(thread_id) if thread_id is not None else None,
+            message_thread_id=(
+                int(thread_id)
+                if thread_id is not None
+                else None
+            ),
             reply_markup=reply_markup,
         )
