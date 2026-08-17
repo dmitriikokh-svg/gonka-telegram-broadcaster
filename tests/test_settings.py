@@ -5,21 +5,61 @@ from broadcaster.settings import Settings, parse_admin_ids
 
 class SettingsTests(unittest.TestCase):
     def test_parse_admin_ids(self) -> None:
-        self.assertEqual(parse_admin_ids("123, 456,123"), frozenset({123, 456}))
+        self.assertEqual(
+            parse_admin_ids("123, 456,123"),
+            frozenset({123, 456}),
+        )
 
-    def test_empty_admin_list_is_allowed_for_bootstrap(self) -> None:
-        settings = Settings.from_env({"TELEGRAM_BOT_TOKEN": "test-token"})
-        self.assertEqual(settings.admin_user_ids, frozenset())
+    def test_empty_admin_list_is_allowed_for_bootstrap(
+        self,
+    ) -> None:
+        settings = Settings.from_env(
+            {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+            }
+        )
+        self.assertEqual(
+            settings.admin_user_ids,
+            frozenset(),
+        )
 
     def test_token_is_required(self) -> None:
-        with self.assertRaisesRegex(ValueError, "TELEGRAM_BOT_TOKEN"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "TELEGRAM_BOT_TOKEN",
+        ):
             Settings.from_env({})
 
     def test_invalid_admin_id_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ValueError, "numeric"):
+        with self.assertRaisesRegex(
+            ValueError,
+            "numeric",
+        ):
             parse_admin_ids("@dmitrii")
+
+    def test_schedule_timezone_is_validated(self) -> None:
+        settings = Settings.from_env(
+            {
+                "TELEGRAM_BOT_TOKEN": "test-token",
+                "SCHEDULE_TIMEZONE": "Europe/Warsaw",
+            }
+        )
+        self.assertEqual(
+            settings.schedule_timezone,
+            "Europe/Warsaw",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "SCHEDULE_TIMEZONE",
+        ):
+            Settings.from_env(
+                {
+                    "TELEGRAM_BOT_TOKEN": "test-token",
+                    "SCHEDULE_TIMEZONE": "Mars/Olympus",
+                }
+            )
 
 
 if __name__ == "__main__":
     unittest.main()
-
