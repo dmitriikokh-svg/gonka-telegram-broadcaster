@@ -18,10 +18,7 @@ def iso_time(value: datetime | None = None) -> str:
 class Database:
     def __init__(self, path: str) -> None:
         if path != ":memory:":
-            Path(path).expanduser().resolve().parent.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
+            Path(path).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path)
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
@@ -84,7 +81,6 @@ class Database:
             );
             """
         )
-
         columns = {
             str(row["name"])
             for row in self.connection.execute(
@@ -95,7 +91,6 @@ class Database:
             self.connection.execute(
                 "ALTER TABLE campaigns ADD COLUMN scheduled_at TEXT"
             )
-
         self.connection.execute(
             """
             CREATE INDEX IF NOT EXISTS campaigns_scheduled_due
@@ -105,9 +100,7 @@ class Database:
         self.connection.commit()
 
     @staticmethod
-    def _row(
-        row: sqlite3.Row | None,
-    ) -> dict[str, Any] | None:
+    def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return None if row is None else dict(row)
 
     def register_destination(
@@ -123,104 +116,61 @@ class Database:
         existing = self.connection.execute(
             """
             SELECT * FROM destinations
-            WHERE chat_id = ?
-              AND COALESCE(thread_id, -1) = COALESCE(?, -1)
+            WHERE chat_id = ? AND COALESCE(thread_id, -1) = COALESCE(?, -1)
             """,
             (chat_id, thread_id),
         ).fetchone()
-
         try:
             if existing:
                 self.connection.execute(
                     """
                     UPDATE destinations
-                    SET alias = ?,
-                        chat_title = ?,
-                        active = 1,
-                        registered_by = ?,
-                        registered_at = ?,
-                        last_verified_at = ?
+                    SET alias = ?, chat_title = ?, active = 1,
+                        registered_by = ?, registered_at = ?, last_verified_at = ?
                     WHERE id = ?
                     """,
-                    (
-                        alias,
-                        chat_title,
-                        registered_by,
-                        now,
-                        now,
-                        existing["id"],
-                    ),
+                    (alias, chat_title, registered_by, now, now, existing["id"]),
                 )
                 destination_id = int(existing["id"])
             else:
                 cursor = self.connection.execute(
                     """
                     INSERT INTO destinations
-                        (alias, chat_id, thread_id, chat_title,
-                         active, registered_by, registered_at,
-                         last_verified_at)
+                        (alias, chat_id, thread_id, chat_title, active,
+                         registered_by, registered_at, last_verified_at)
                     VALUES (?, ?, ?, ?, 1, ?, ?, ?)
                     """,
-                    (
-                        alias,
-                        chat_id,
-                        thread_id,
-                        chat_title,
-                        registered_by,
-                        now,
-                        now,
-                    ),
+                    (alias, chat_id, thread_id, chat_title, registered_by, now, now),
                 )
                 destination_id = int(cursor.lastrowid)
-
             self.connection.commit()
         except sqlite3.IntegrityError as exc:
             self.connection.rollback()
-            raise ValueError(
-                f"Alias '{alias}' is already used by another destination"
-            ) from exc
-
+            raise ValueError(f"Alias '{alias}' is already used by another destination") from exc
         return self.get_destination(destination_id)  # type: ignore[return-value]
 
-    def get_destination(
-        self,
-        destination_id: int,
-    ) -> dict[str, Any] | None:
+    def get_destination(self, destination_id: int) -> dict[str, Any] | None:
         return self._row(
             self.connection.execute(
-                "SELECT * FROM destinations WHERE id = ?",
-                (destination_id,),
+                "SELECT * FROM destinations WHERE id = ?", (destination_id,)
             ).fetchone()
         )
 
-    def list_destinations(
-        self,
-        *,
-        active_only: bool = True,
-    ) -> list[dict[str, Any]]:
+    def list_destinations(self, *, active_only: bool = True) -> list[dict[str, Any]]:
         where = "WHERE active = 1" if active_only else ""
         rows = self.connection.execute(
-            f"SELECT * FROM destinations {where} "
-            "ORDER BY alias COLLATE NOCASE"
+            f"SELECT * FROM destinations {where} ORDER BY alias COLLATE NOCASE"  # noqa: S608
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def resolve_destinations(
-        self,
-        aliases: Iterable[str] | None,
-    ) -> tuple[list[dict[str, Any]], list[str]]:
+    def resolve_destinations(self, aliases: Iterable[str] | None) -> tuple[list[dict[str, Any]], list[str]]:
         active = self.list_destinations(active_only=True)
         if aliases is None:
             return active, []
-
-        by_alias = {
-            row["alias"].casefold(): row
-            for row in active
-        }
+        by_alias = {row["alias"].casefold(): row for row in active}
         resolved: list[dict[str, Any]] = []
         missing: list[str] = []
         seen: set[int] = set()
-
         for alias in aliases:
             row = by_alias.get(alias.casefold())
             if row is None:
@@ -228,20 +178,13 @@ class Database:
             elif int(row["id"]) not in seen:
                 resolved.append(row)
                 seen.add(int(row["id"]))
-
         return resolved, missing
 
-    def deactivate_destination(
-        self,
-        *,
-        chat_id: int,
-        thread_id: int | None,
-    ) -> bool:
+    def deactivate_destination(self, *, chat_id: int, thread_id: int | None) -> bool:
         cursor = self.connection.execute(
             """
             UPDATE destinations SET active = 0
-            WHERE chat_id = ?
-              AND COALESCE(thread_id, -1) = COALESCE(?, -1)
+            WHERE chat_id = ? AND COALESCE(thread_id, -1) = COALESCE(?, -1)
             """,
             (chat_id, thread_id),
         )
@@ -250,23 +193,14 @@ class Database:
 
     def deactivate_chat(self, chat_id: int) -> int:
         cursor = self.connection.execute(
-            "UPDATE destinations SET active = 0 WHERE chat_id = ?",
-            (chat_id,),
+            "UPDATE destinations SET active = 0 WHERE chat_id = ?", (chat_id,)
         )
         self.connection.commit()
         return cursor.rowcount
 
-    def migrate_destination_chat(
-        self,
-        destination_id: int,
-        new_chat_id: int,
-    ) -> None:
+    def migrate_destination_chat(self, destination_id: int, new_chat_id: int) -> None:
         self.connection.execute(
-            """
-            UPDATE destinations
-            SET chat_id = ?, last_verified_at = ?
-            WHERE id = ?
-            """,
+            "UPDATE destinations SET chat_id = ?, last_verified_at = ? WHERE id = ?",
             (new_chat_id, iso_time(), destination_id),
         )
         self.connection.commit()
@@ -281,26 +215,21 @@ class Database:
         now: datetime | None = None,
     ) -> dict[str, Any]:
         current = now or utc_now()
-
         self.connection.execute(
             """
-            UPDATE campaigns
-            SET status = 'cancelled', completed_at = ?
+            UPDATE campaigns SET status = 'cancelled', completed_at = ?
             WHERE created_by = ?
               AND status IN (
-                  'awaiting_content',
-                  'ready',
-                  'awaiting_schedule'
+                  'selecting_targets', 'awaiting_content',
+                  'ready', 'awaiting_schedule'
               )
             """,
             (iso_time(current), created_by),
         )
-
         cursor = self.connection.execute(
             """
             INSERT INTO campaigns
-                (created_by, target_ids, status, silent,
-                 created_at, expires_at)
+                (created_by, target_ids, status, silent, created_at, expires_at)
             VALUES (?, ?, 'awaiting_content', ?, ?, ?)
             """,
             (
@@ -308,101 +237,164 @@ class Database:
                 json.dumps(target_ids),
                 int(silent),
                 iso_time(current),
-                iso_time(
-                    current + timedelta(minutes=ttl_minutes)
-                ),
+                iso_time(current + timedelta(minutes=ttl_minutes)),
             ),
         )
         self.connection.commit()
+        return self.get_campaign(int(cursor.lastrowid))  # type: ignore[return-value]
 
-        return self.get_campaign(
-            int(cursor.lastrowid)
-        )  # type: ignore[return-value]
-
-    def get_campaign(
+    def create_selection_campaign(
         self,
-        campaign_id: int,
-    ) -> dict[str, Any] | None:
+        *,
+        created_by: int,
+        silent: bool,
+        ttl_minutes: int,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        current = now or utc_now()
+        self.connection.execute(
+            """
+            UPDATE campaigns SET status = 'cancelled', completed_at = ?
+            WHERE created_by = ?
+              AND status IN (
+                  'selecting_targets', 'awaiting_content',
+                  'ready', 'awaiting_schedule'
+              )
+            """,
+            (iso_time(current), created_by),
+        )
+        cursor = self.connection.execute(
+            """
+            INSERT INTO campaigns
+                (created_by, target_ids, status, silent, created_at, expires_at)
+            VALUES (?, '[]', 'selecting_targets', ?, ?, ?)
+            """,
+            (
+                created_by,
+                int(silent),
+                iso_time(current),
+                iso_time(current + timedelta(minutes=ttl_minutes)),
+            ),
+        )
+        self.connection.commit()
+        return self.get_campaign(int(cursor.lastrowid))  # type: ignore[return-value]
+
+    def get_campaign(self, campaign_id: int) -> dict[str, Any] | None:
         row = self._row(
             self.connection.execute(
-                "SELECT * FROM campaigns WHERE id = ?",
-                (campaign_id,),
+                "SELECT * FROM campaigns WHERE id = ?", (campaign_id,)
             ).fetchone()
         )
         if row is not None:
             row["target_ids"] = json.loads(row["target_ids"])
         return row
 
-    def get_open_campaign(
-        self,
-        created_by: int,
-    ) -> dict[str, Any] | None:
+    def get_open_campaign(self, created_by: int) -> dict[str, Any] | None:
         row = self.connection.execute(
             """
             SELECT * FROM campaigns
             WHERE created_by = ?
               AND status IN (
-                  'awaiting_content',
-                  'ready',
-                  'awaiting_schedule'
+                  'selecting_targets', 'awaiting_content',
+                  'ready', 'awaiting_schedule'
               )
-            ORDER BY id DESC
-            LIMIT 1
+            ORDER BY id DESC LIMIT 1
             """,
             (created_by,),
         ).fetchone()
-
         result = self._row(row)
         if result is not None:
-            result["target_ids"] = json.loads(
-                result["target_ids"]
-            )
+            result["target_ids"] = json.loads(result["target_ids"])
         return result
 
-    def set_campaign_content(
+    def toggle_campaign_target(
         self,
         campaign_id: int,
-        source_chat_id: int,
-        source_message_id: int,
-    ) -> bool:
+        created_by: int,
+        destination_id: int,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[bool, int] | None:
+        current = now or utc_now()
+        campaign = self.get_campaign(campaign_id)
+        destination = self.get_destination(destination_id)
+        if (
+            campaign is None
+            or int(campaign["created_by"]) != created_by
+            or campaign["status"] != "selecting_targets"
+            or str(campaign["expires_at"]) < iso_time(current)
+            or destination is None
+            or not destination["active"]
+        ):
+            return None
+
+        target_ids = [int(item) for item in campaign["target_ids"]]
+        if destination_id in target_ids:
+            target_ids.remove(destination_id)
+            selected = False
+        else:
+            target_ids.append(destination_id)
+            selected = True
+
         cursor = self.connection.execute(
             """
-            UPDATE campaigns
-            SET source_chat_id = ?,
-                source_message_id = ?,
-                status = 'ready'
-            WHERE id = ?
-              AND status = 'awaiting_content'
+            UPDATE campaigns SET target_ids = ?
+            WHERE id = ? AND created_by = ? AND status = 'selecting_targets'
             """,
-            (
-                source_chat_id,
-                source_message_id,
-                campaign_id,
-            ),
+            (json.dumps(target_ids), campaign_id, created_by),
+        )
+        self.connection.commit()
+        if cursor.rowcount != 1:
+            return None
+        return selected, len(target_ids)
+
+    def finish_target_selection(
+        self,
+        campaign_id: int,
+        created_by: int,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        current = now or utc_now()
+        campaign = self.get_campaign(campaign_id)
+        if (
+            campaign is None
+            or int(campaign["created_by"]) != created_by
+            or campaign["status"] != "selecting_targets"
+            or str(campaign["expires_at"]) < iso_time(current)
+            or not campaign["target_ids"]
+        ):
+            return False
+
+        cursor = self.connection.execute(
+            """
+            UPDATE campaigns SET status = 'awaiting_content'
+            WHERE id = ? AND created_by = ? AND status = 'selecting_targets'
+            """,
+            (campaign_id, created_by),
         )
         self.connection.commit()
         return cursor.rowcount == 1
 
-    def transition_to_sending(
-        self,
-        campaign_id: int,
-        created_by: int,
-    ) -> bool:
+    def set_campaign_content(self, campaign_id: int, source_chat_id: int, source_message_id: int) -> bool:
         cursor = self.connection.execute(
             """
             UPDATE campaigns
-            SET status = 'sending', confirmed_at = ?
-            WHERE id = ?
-              AND created_by = ?
-              AND status = 'ready'
-              AND expires_at >= ?
+            SET source_chat_id = ?, source_message_id = ?, status = 'ready'
+            WHERE id = ? AND status = 'awaiting_content'
             """,
-            (
-                iso_time(),
-                campaign_id,
-                created_by,
-                iso_time(),
-            ),
+            (source_chat_id, source_message_id, campaign_id),
+        )
+        self.connection.commit()
+        return cursor.rowcount == 1
+
+    def transition_to_sending(self, campaign_id: int, created_by: int) -> bool:
+        cursor = self.connection.execute(
+            """
+            UPDATE campaigns SET status = 'sending', confirmed_at = ?
+            WHERE id = ? AND created_by = ? AND status = 'ready' AND expires_at >= ?
+            """,
+            (iso_time(), campaign_id, created_by, iso_time()),
         )
         self.connection.commit()
         return cursor.rowcount == 1
@@ -417,18 +409,11 @@ class Database:
         current = now or utc_now()
         cursor = self.connection.execute(
             """
-            UPDATE campaigns
-            SET status = 'awaiting_schedule'
-            WHERE id = ?
-              AND created_by = ?
-              AND status = 'ready'
+            UPDATE campaigns SET status = 'awaiting_schedule'
+            WHERE id = ? AND created_by = ? AND status = 'ready'
               AND expires_at >= ?
             """,
-            (
-                campaign_id,
-                created_by,
-                iso_time(current),
-            ),
+            (campaign_id, created_by, iso_time(current)),
         )
         self.connection.commit()
         return cursor.rowcount == 1
@@ -445,18 +430,12 @@ class Database:
         cursor = self.connection.execute(
             """
             UPDATE campaigns
-            SET status = 'scheduled',
-                scheduled_at = ?,
-                confirmed_at = ?
-            WHERE id = ?
-              AND created_by = ?
-              AND status = 'awaiting_schedule'
-              AND expires_at >= ?
+            SET status = 'scheduled', scheduled_at = ?, confirmed_at = ?
+            WHERE id = ? AND created_by = ?
+              AND status = 'awaiting_schedule' AND expires_at >= ?
             """,
             (
-                iso_time(
-                    scheduled_at.astimezone(timezone.utc)
-                ),
+                iso_time(scheduled_at.astimezone(timezone.utc)),
                 iso_time(current),
                 campaign_id,
                 created_by,
@@ -475,22 +454,14 @@ class Database:
         rows = self.connection.execute(
             """
             SELECT * FROM campaigns
-            WHERE status = 'scheduled'
-              AND scheduled_at <= ?
-            ORDER BY scheduled_at, id
-            LIMIT ?
+            WHERE status = 'scheduled' AND scheduled_at <= ?
+            ORDER BY scheduled_at, id LIMIT ?
             """,
-            (
-                iso_time(now or utc_now()),
-                limit,
-            ),
+            (iso_time(now or utc_now()), limit),
         ).fetchall()
-
         result = [dict(row) for row in rows]
         for row in result:
-            row["target_ids"] = json.loads(
-                row["target_ids"]
-            )
+            row["target_ids"] = json.loads(row["target_ids"])
         return result
 
     def claim_due_campaign(
@@ -502,94 +473,55 @@ class Database:
         current = now or utc_now()
         cursor = self.connection.execute(
             """
-            UPDATE campaigns
-            SET status = 'sending'
-            WHERE id = ?
-              AND status = 'scheduled'
-              AND scheduled_at <= ?
+            UPDATE campaigns SET status = 'sending'
+            WHERE id = ? AND status = 'scheduled' AND scheduled_at <= ?
             """,
-            (
-                campaign_id,
-                iso_time(current),
-            ),
+            (campaign_id, iso_time(current)),
         )
         self.connection.commit()
         return cursor.rowcount == 1
 
-    def cancel_campaign(
-        self,
-        campaign_id: int,
-        created_by: int,
-    ) -> bool:
+    def cancel_campaign(self, campaign_id: int, created_by: int) -> bool:
         cursor = self.connection.execute(
             """
-            UPDATE campaigns
-            SET status = 'cancelled', completed_at = ?
-            WHERE id = ?
-              AND created_by = ?
+            UPDATE campaigns SET status = 'cancelled', completed_at = ?
+            WHERE id = ? AND created_by = ?
               AND status IN (
-                  'awaiting_content',
-                  'ready',
-                  'awaiting_schedule',
-                  'scheduled'
+                  'selecting_targets', 'awaiting_content', 'ready',
+                  'awaiting_schedule', 'scheduled'
               )
             """,
-            (
-                iso_time(),
-                campaign_id,
-                created_by,
-            ),
+            (iso_time(), campaign_id, created_by),
         )
         self.connection.commit()
         return cursor.rowcount == 1
 
-    def cancel_open_campaigns(
-        self,
-        created_by: int,
-    ) -> int:
+    def cancel_open_campaigns(self, created_by: int) -> int:
         cursor = self.connection.execute(
             """
-            UPDATE campaigns
-            SET status = 'cancelled', completed_at = ?
+            UPDATE campaigns SET status = 'cancelled', completed_at = ?
             WHERE created_by = ?
               AND status IN (
-                  'awaiting_content',
-                  'ready',
-                  'awaiting_schedule'
+                  'selecting_targets', 'awaiting_content',
+                  'ready', 'awaiting_schedule'
               )
             """,
-            (
-                iso_time(),
-                created_by,
-            ),
+            (iso_time(), created_by),
         )
         self.connection.commit()
         return cursor.rowcount
 
-    def finish_campaign(
-        self,
-        campaign_id: int,
-        status: str = "completed",
-    ) -> None:
+    def finish_campaign(self, campaign_id: int, status: str = "completed") -> None:
         self.connection.execute(
-            """
-            UPDATE campaigns
-            SET status = ?, completed_at = ?
-            WHERE id = ? AND status = 'sending'
-            """,
-            (
-                status,
-                iso_time(),
-                campaign_id,
-            ),
+            "UPDATE campaigns SET status = ?, completed_at = ? WHERE id = ? AND status = 'sending'",
+            (status, iso_time(), campaign_id),
         )
         self.connection.commit()
 
     def recover_interrupted_campaigns(self) -> int:
         cursor = self.connection.execute(
             """
-            UPDATE campaigns
-            SET status = 'interrupted', completed_at = ?
+            UPDATE campaigns SET status = 'interrupted', completed_at = ?
             WHERE status = 'sending'
             """,
             (iso_time(),),
@@ -608,24 +540,16 @@ class Database:
         error_code: int | None = None,
         error_summary: str | None = None,
     ) -> None:
-        sent_at = (
-            iso_time()
-            if status == "sent"
-            else None
-        )
-
+        sent_at = iso_time() if status == "sent" else None
         self.connection.execute(
             """
             INSERT INTO deliveries
-                (campaign_id, destination_id, status,
-                 telegram_message_id, attempts, error_code,
-                 error_summary, sent_at)
+                (campaign_id, destination_id, status, telegram_message_id,
+                 attempts, error_code, error_summary, sent_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(campaign_id, destination_id)
-            DO UPDATE SET
+            ON CONFLICT(campaign_id, destination_id) DO UPDATE SET
                 status = excluded.status,
-                telegram_message_id =
-                    excluded.telegram_message_id,
+                telegram_message_id = excluded.telegram_message_id,
                 attempts = excluded.attempts,
                 error_code = excluded.error_code,
                 error_summary = excluded.error_summary,
@@ -644,122 +568,54 @@ class Database:
         )
         self.connection.commit()
 
-    def delivery_summary(
-        self,
-        campaign_id: int,
-    ) -> dict[str, int]:
-        summary = {
-            "sent": 0,
-            "failed": 0,
-            "skipped": 0,
-        }
-
+    def delivery_summary(self, campaign_id: int) -> dict[str, int]:
+        summary = {"sent": 0, "failed": 0, "skipped": 0}
         rows = self.connection.execute(
-            """
-            SELECT status, COUNT(*) AS count
-            FROM deliveries
-            WHERE campaign_id = ?
-            GROUP BY status
-            """,
+            "SELECT status, COUNT(*) AS count FROM deliveries WHERE campaign_id = ? GROUP BY status",
             (campaign_id,),
         ).fetchall()
-
         for row in rows:
-            summary[str(row["status"])] = int(
-                row["count"]
-            )
+            summary[str(row["status"])] = int(row["count"])
         return summary
 
-    def failed_deliveries(
-        self,
-        campaign_id: int,
-    ) -> list[dict[str, Any]]:
+    def failed_deliveries(self, campaign_id: int) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
-            SELECT
-                destinations.alias,
-                deliveries.error_summary
-            FROM deliveries
-            JOIN destinations
-              ON destinations.id =
-                 deliveries.destination_id
-            WHERE deliveries.campaign_id = ?
-              AND deliveries.status = 'failed'
+            SELECT destinations.alias, deliveries.error_summary
+            FROM deliveries JOIN destinations ON destinations.id = deliveries.destination_id
+            WHERE deliveries.campaign_id = ? AND deliveries.status = 'failed'
             ORDER BY destinations.alias COLLATE NOCASE
             """,
             (campaign_id,),
         ).fetchall()
-
         return [dict(row) for row in rows]
 
-    def recent_campaigns(
-        self,
-        created_by: int,
-        limit: int = 10,
-    ) -> list[dict[str, Any]]:
+    def recent_campaigns(self, created_by: int, limit: int = 10) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
             SELECT campaigns.*,
-                   SUM(
-                       CASE
-                           WHEN deliveries.status = 'sent'
-                           THEN 1
-                           ELSE 0
-                       END
-                   ) AS sent_count,
-                   SUM(
-                       CASE
-                           WHEN deliveries.status = 'failed'
-                           THEN 1
-                           ELSE 0
-                       END
-                   ) AS failed_count
+                   SUM(CASE WHEN deliveries.status = 'sent' THEN 1 ELSE 0 END) AS sent_count,
+                   SUM(CASE WHEN deliveries.status = 'failed' THEN 1 ELSE 0 END) AS failed_count
             FROM campaigns
-            LEFT JOIN deliveries
-              ON deliveries.campaign_id = campaigns.id
+            LEFT JOIN deliveries ON deliveries.campaign_id = campaigns.id
             WHERE campaigns.created_by = ?
             GROUP BY campaigns.id
-            ORDER BY campaigns.id DESC
-            LIMIT ?
+            ORDER BY campaigns.id DESC LIMIT ?
             """,
-            (
-                created_by,
-                limit,
-            ),
+            (created_by, limit),
         ).fetchall()
-
         return [dict(row) for row in rows]
 
-    def get_state_int(
-        self,
-        key: str,
-        default: int = 0,
-    ) -> int:
-        row = self.connection.execute(
-            "SELECT value FROM bot_state WHERE key = ?",
-            (key,),
-        ).fetchone()
-        return (
-            default
-            if row is None
-            else int(row["value"])
-        )
+    def get_state_int(self, key: str, default: int = 0) -> int:
+        row = self.connection.execute("SELECT value FROM bot_state WHERE key = ?", (key,)).fetchone()
+        return default if row is None else int(row["value"])
 
-    def set_state_int(
-        self,
-        key: str,
-        value: int,
-    ) -> None:
+    def set_state_int(self, key: str, value: int) -> None:
         self.connection.execute(
             """
-            INSERT INTO bot_state(key, value)
-            VALUES (?, ?)
-            ON CONFLICT(key)
-            DO UPDATE SET value = excluded.value
+            INSERT INTO bot_state(key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
             """,
-            (
-                key,
-                str(value),
-            ),
+            (key, str(value)),
         )
         self.connection.commit()
