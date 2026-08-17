@@ -112,6 +112,20 @@ class TelegramAPI:
             payload["message_thread_id"] = message_thread_id
         return self.call("copyMessage", **payload)
 
+    def edit_message_reply_markup(
+        self,
+        chat_id: int,
+        message_id: int,
+        *,
+        reply_markup: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self.call(
+            "editMessageReplyMarkup",
+            chat_id=chat_id,
+            message_id=message_id,
+            reply_markup=reply_markup,
+        )
+
     def answer_callback_query(
         self, callback_query_id: str, text: str = "", *, show_alert: bool = False
     ) -> bool:
@@ -126,4 +140,3 @@ class TelegramAPI:
 
     def get_chat_member(self, chat_id: int, user_id: int) -> dict[str, Any]:
         return self.call("getChatMember", chat_id=chat_id, user_id=user_id)
-
